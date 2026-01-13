@@ -44,7 +44,12 @@ create-manifest:
 1. Assumes the specified AWS role
 2. Logs into Amazon ECR
 3. Sets up Docker Buildx
-4. Creates multi-platform manifests:
-   - `{ecr-registry}:{image-tag}` from `{ecr-registry}:{image-tag}-amd64` and `{ecr-registry}:{image-tag}-arm64`
-   - `{ecr-registry}:{git-sha}` from `{ecr-registry}:{git-sha}-amd64` and `{ecr-registry}:{git-sha}-arm64`
-5. Verifies both manifests were created successfully
+4. **Verifies all architecture images exist** (with retry logic up to 2.5 minutes)
+   - Waits for `{ecr-registry}:{image-tag}-amd64` and `{ecr-registry}:{image-tag}-arm64`
+   - Waits for `{ecr-registry}:{git-sha}-amd64` and `{ecr-registry}:{git-sha}-arm64`
+5. **Creates multi-platform manifests**:
+   - `{ecr-registry}:{image-tag}` from `{image-tag}-amd64` and `{image-tag}-arm64`
+   - `{ecr-registry}:{git-sha}` from `{git-sha}-amd64` and `{git-sha}-arm64`
+6. **Verifies both manifests** were created correctly:
+   - Confirms both manifests contain `linux/amd64` and `linux/arm64` platforms
+   - Verifies both tags reference the same manifest digest (ensuring tag lookup works)

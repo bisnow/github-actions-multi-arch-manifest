@@ -34,35 +34,155 @@ runs:
     - name: Set up Docker Buildx
       uses: docker/setup-buildx-action@v3
 
-    - name: Create and Push Multi-Platform Manifests
+    - name: Verify Architecture Images Exist in ECR
       run: |
         ecr_registry="${{ inputs.ecr-registry }}"
         image_tag="${{ inputs.image-tag }}"
         git_sha="${{ inputs.git-sha }}"
-        
+
         if [ -z "$git_sha" ]; then
           git_sha="${{ github.sha }}"
         fi
-        
+
+        echo "🔍 Verifying all architecture images are available in ECR..."
+        max_attempts=30
+        attempt=0
+        sleep_time=5
+
+        while [ $attempt -lt $max_attempts ]; do
+          tag_amd64_exists=false
+          tag_arm64_exists=false
+          sha_amd64_exists=false
+          sha_arm64_exists=false
+
+          echo "Checking image-tag AMD64 image..."
+          if docker buildx imagetools inspect "$ecr_registry:$image_tag-amd64" >/dev/null 2>&1; then
+            echo "✅ Found: $ecr_registry:$image_tag-amd64"
+            tag_amd64_exists=true
+          else
+            echo "⏳ Waiting for: $ecr_registry:$image_tag-amd64"
+          fi
+
+          echo "Checking image-tag ARM64 image..."
+          if docker buildx imagetools inspect "$ecr_registry:$image_tag-arm64" >/dev/null 2>&1; then
+            echo "✅ Found: $ecr_registry:$image_tag-arm64"
+            tag_arm64_exists=true
+          else
+            echo "⏳ Waiting for: $ecr_registry:$image_tag-arm64"
+          fi
+
+          echo "Checking git-sha AMD64 image..."
+          if docker buildx imagetools inspect "$ecr_registry:$git_sha-amd64" >/dev/null 2>&1; then
+            echo "✅ Found: $ecr_registry:$git_sha-amd64"
+            sha_amd64_exists=true
+          else
+            echo "⏳ Waiting for: $ecr_registry:$git_sha-amd64"
+          fi
+
+          echo "Checking git-sha ARM64 image..."
+          if docker buildx imagetools inspect "$ecr_registry:$git_sha-arm64" >/dev/null 2>&1; then
+            echo "✅ Found: $ecr_registry:$git_sha-arm64"
+            sha_arm64_exists=true
+          else
+            echo "⏳ Waiting for: $ecr_registry:$git_sha-arm64"
+          fi
+
+          if [ "$tag_amd64_exists" = true ] && [ "$tag_arm64_exists" = true ] && [ "$sha_amd64_exists" = true ] && [ "$sha_arm64_exists" = true ]; then
+            echo "✅ All architecture images are available!"
+            exit 0
+          fi
+
+          attempt=$((attempt + 1))
+          if [ $attempt -lt $max_attempts ]; then
+            echo "⏳ Attempt $attempt/$max_attempts - waiting ${sleep_time}s before retry..."
+            sleep $sleep_time
+          fi
+        done
+
+        echo "❌ Timeout waiting for architecture images to be available in ECR"
+        echo "Image-tag AMD64 available: $tag_amd64_exists"
+        echo "Image-tag ARM64 available: $tag_arm64_exists"
+        echo "Git-SHA AMD64 available: $sha_amd64_exists"
+        echo "Git-SHA ARM64 available: $sha_arm64_exists"
+        exit 1
+      shell: bash
+
+    - name: Create Multi-Platform Manifests
+      run: |
+        ecr_registry="${{ inputs.ecr-registry }}"
+        image_tag="${{ inputs.image-tag }}"
+        git_sha="${{ inputs.git-sha }}"
+
+        if [ -z "$git_sha" ]; then
+          git_sha="${{ github.sha }}"
+        fi
+
         # Create multi-platform manifest for the image tag
         echo "Creating multi-platform manifest for $image_tag..."
         docker buildx imagetools create \
           --tag "$ecr_registry:$image_tag" \
           "$ecr_registry:$image_tag-amd64" \
           "$ecr_registry:$image_tag-arm64"
-        
+
         # Create multi-platform manifest for the Git SHA tag (required for tag-release workflow)
         echo "Creating multi-platform manifest for Git SHA: $git_sha..."
         docker buildx imagetools create \
           --tag "$ecr_registry:$git_sha" \
           "$ecr_registry:$git_sha-amd64" \
           "$ecr_registry:$git_sha-arm64"
-        
-        # Verify both manifests were created successfully
-        echo "Verifying image tag manifest was created..."
-        docker buildx imagetools inspect "$ecr_registry:$image_tag"
-        
-        echo "Verifying Git SHA manifest was created..."
-        docker buildx imagetools inspect "$ecr_registry:$git_sha"
+
+        echo "✅ Multi-platform manifests created successfully"
+      shell: bash
+
+    - name: Verify Manifests Contains Both Architectures
+      run: |
+        ecr_registry="${{ inputs.ecr-registry }}"
+        image_tag="${{ inputs.image-tag }}"
+        git_sha="${{ inputs.git-sha }}"
+
+        if [ -z "$git_sha" ]; then
+          git_sha="${{ github.sha }}"
+        fi
+
+        echo "🔍 Verifying image-tag manifest contains both architectures..."
+        manifest_output=$(docker buildx imagetools inspect "$ecr_registry:$image_tag")
+
+        if echo "$manifest_output" | grep -q "linux/amd64" && echo "$manifest_output" | grep -q "linux/arm64"; then
+          echo "✅ Image-tag manifest verified - contains both linux/amd64 and linux/arm64"
+        else
+          echo "❌ Image-tag manifest verification failed - missing one or both architectures"
+          echo "$manifest_output"
+          exit 1
+        fi
+
+        echo "🔍 Verifying git-sha manifest contains both architectures..."
+        manifest_output=$(docker buildx imagetools inspect "$ecr_registry:$git_sha")
+
+        if echo "$manifest_output" | grep -q "linux/amd64" && echo "$manifest_output" | grep -q "linux/arm64"; then
+          echo "✅ Git-sha manifest verified - contains both linux/amd64 and linux/arm64"
+        else
+          echo "❌ Git-sha manifest verification failed - missing one or both architectures"
+          echo "$manifest_output"
+          exit 1
+        fi
+
+        echo "🔍 Verifying both tags point to the same manifest..."
+        image_tag_digest=$(docker buildx imagetools inspect "$ecr_registry:$image_tag" --raw | sha256sum | awk '{print $1}')
+        git_sha_digest=$(docker buildx imagetools inspect "$ecr_registry:$git_sha" --raw | sha256sum | awk '{print $1}')
+
+        if [ "$image_tag_digest" = "$git_sha_digest" ]; then
+          echo "✅ Both tags point to the same manifest digest"
+        else
+          echo "⚠️ Warning: Tags point to different manifests"
+          echo "Image tag digest: $image_tag_digest"
+          echo "Git SHA digest: $git_sha_digest"
+          exit 1
+        fi
+
+        echo ""
+        echo "📦 Summary:"
+        echo "   Tags: $image_tag, $git_sha"
+        echo "   Architectures: linux/amd64, linux/arm64"
+        echo "   Digest: sha256:$image_tag_digest"
       shell: bash
 
