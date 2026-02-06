@@ -53,3 +53,12 @@ create-manifest:
 6. **Verifies both manifests** were created correctly:
    - Confirms both manifests contain `linux/amd64` and `linux/arm64` platforms
    - Verifies both tags reference the same manifest digest (ensuring tag lookup works)
+
+   ## Versioning
+
+This action uses rolling major version tags. You can pin to:
+
+- A specific version: `@v3.1.0` (exact, never changes)
+- A major version: `@v3` (recommended, gets bug fixes and new features)
+
+When a new semantic version tag (e.g., `v3.2.0`) is pushed, a GitHub Actions workflow automatically updates the corresponding major version tag (`v3`) to point to the new release.
