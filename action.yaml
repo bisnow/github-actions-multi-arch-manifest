@@ -1,14 +1,19 @@
 name: 'Create Multi-Architecture Manifest'
-description: 'Creates and pushes multi-platform Docker manifests for amd64 and arm64'
+description: 'Creates and pushes multi-platform Docker manifests for amd64 and arm64 to either ECR or Harbor'
 inputs:
   image-tag:
     description: 'Image tag to create manifest for'
     required: true
   ecr-registry:
-    description: 'ECR registry URL (e.g., 560285300220.dkr.ecr.us-east-1.amazonaws.com/biscred-api)'
-    required: true
+    description: 'ECR registry URL. Provide this OR harbor-registry, not both.'
+    required: false
+    default: ''
+  harbor-registry:
+    description: 'Harbor registry URL (e.g., harbor.bisnow.cloud/bisnow/hello-k8s). Provide this OR ecr-registry, not both.'
+    required: false
+    default: ''
   aws-account:
-    description: 'AWS account name for assuming role'
+    description: 'AWS account name for assuming role (only used when pushing to ECR)'
     required: false
     default: 'bisnow'
   git-sha:
@@ -19,25 +24,49 @@ inputs:
 runs:
   using: 'composite'
   steps:
+    - name: Validate registry inputs
+      shell: bash
+      run: |
+        if [ -z "${{ inputs.ecr-registry }}" ] && [ -z "${{ inputs.harbor-registry }}" ]; then
+          echo "ERROR: You must provide either ecr-registry or harbor-registry"
+          exit 1
+        fi
+        if [ -n "${{ inputs.ecr-registry }}" ] && [ -n "${{ inputs.harbor-registry }}" ]; then
+          echo "ERROR: Provide ecr-registry OR harbor-registry, not both"
+          exit 1
+        fi
+
+    - name: Set active registry
+      id: registry
+      shell: bash
+      run: |
+        if [ -n "${{ inputs.harbor-registry }}" ]; then
+          echo "url=${{ inputs.harbor-registry }}" >> $GITHUB_OUTPUT
+        else
+          echo "url=${{ inputs.ecr-registry }}" >> $GITHUB_OUTPUT
+        fi
+
     - name: Checkout Repository
       uses: actions/checkout@v5
 
     - name: Assume role for AWS Account
+      if: ${{ inputs.harbor-registry == '' }}
       uses: bisnow/github-actions-assume-role-for-environment@main
       with:
         aws-account: ${{ inputs.aws-account }}
 
     - name: Login to Amazon ECR
+      if: ${{ inputs.harbor-registry == '' }}
       id: login-ecr
       uses: aws-actions/amazon-ecr-login@v2
 
     - name: Set up Docker Buildx
       uses: docker/setup-buildx-action@v3
 
-    - name: Verify Architecture Images Exist in ECR
+    - name: Verify Architecture Images Exist
       shell: bash
       run: |
-        ecr_registry="${{ inputs.ecr-registry }}"
+        registry="${{ steps.registry.outputs.url }}"
         image_tag="${{ inputs.image-tag }}"
         git_sha="${{ inputs.git-sha }}"
 
@@ -45,7 +74,7 @@ runs:
           git_sha="${{ github.sha }}"
         fi
 
-        echo "🔍 Verifying all architecture images are available in ECR..."
+        echo "🔍 Verifying all architecture images are available..."
         max_attempts=30
         attempt=0
         sleep_time=5
@@ -57,35 +86,35 @@ runs:
           sha_arm64_exists=false
 
           echo "Checking image-tag AMD64 image..."
-          if docker buildx imagetools inspect "$ecr_registry:$image_tag-amd64" >/dev/null 2>&1; then
-            echo "✅ Found: $ecr_registry:$image_tag-amd64"
+          if docker buildx imagetools inspect "$registry:$image_tag-amd64" >/dev/null 2>&1; then
+            echo "✅ Found: $registry:$image_tag-amd64"
             tag_amd64_exists=true
           else
-            echo "⏳ Waiting for: $ecr_registry:$image_tag-amd64"
+            echo "⏳ Waiting for: $registry:$image_tag-amd64"
           fi
 
           echo "Checking image-tag ARM64 image..."
-          if docker buildx imagetools inspect "$ecr_registry:$image_tag-arm64" >/dev/null 2>&1; then
-            echo "✅ Found: $ecr_registry:$image_tag-arm64"
+          if docker buildx imagetools inspect "$registry:$image_tag-arm64" >/dev/null 2>&1; then
+            echo "✅ Found: $registry:$image_tag-arm64"
             tag_arm64_exists=true
           else
-            echo "⏳ Waiting for: $ecr_registry:$image_tag-arm64"
+            echo "⏳ Waiting for: $registry:$image_tag-arm64"
           fi
 
           echo "Checking git-sha AMD64 image..."
-          if docker buildx imagetools inspect "$ecr_registry:$git_sha-amd64" >/dev/null 2>&1; then
-            echo "✅ Found: $ecr_registry:$git_sha-amd64"
+          if docker buildx imagetools inspect "$registry:$git_sha-amd64" >/dev/null 2>&1; then
+            echo "✅ Found: $registry:$git_sha-amd64"
             sha_amd64_exists=true
           else
-            echo "⏳ Waiting for: $ecr_registry:$git_sha-amd64"
+            echo "⏳ Waiting for: $registry:$git_sha-amd64"
           fi
 
           echo "Checking git-sha ARM64 image..."
-          if docker buildx imagetools inspect "$ecr_registry:$git_sha-arm64" >/dev/null 2>&1; then
-            echo "✅ Found: $ecr_registry:$git_sha-arm64"
+          if docker buildx imagetools inspect "$registry:$git_sha-arm64" >/dev/null 2>&1; then
+            echo "✅ Found: $registry:$git_sha-arm64"
             sha_arm64_exists=true
           else
-            echo "⏳ Waiting for: $ecr_registry:$git_sha-arm64"
+            echo "⏳ Waiting for: $registry:$git_sha-arm64"
           fi
 
           if [ "$tag_amd64_exists" = true ] && [ "$tag_arm64_exists" = true ] && [ "$sha_amd64_exists" = true ] && [ "$sha_arm64_exists" = true ]; then
@@ -100,7 +129,7 @@ runs:
           fi
         done
 
-        echo "❌ Timeout waiting for architecture images to be available in ECR"
+        echo "❌ Timeout waiting for architecture images to be available"
         echo "Image-tag AMD64 available: $tag_amd64_exists"
         echo "Image-tag ARM64 available: $tag_arm64_exists"
         echo "Git-SHA AMD64 available: $sha_amd64_exists"
@@ -110,7 +139,7 @@ runs:
     - name: Create Multi-Platform Manifests
       shell: bash
       run: |
-        ecr_registry="${{ inputs.ecr-registry }}"
+        registry="${{ steps.registry.outputs.url }}"
         image_tag="${{ inputs.image-tag }}"
         git_sha="${{ inputs.git-sha }}"
 
@@ -118,26 +147,24 @@ runs:
           git_sha="${{ github.sha }}"
         fi
 
-        # Create multi-platform manifest for the image tag
         echo "Creating multi-platform manifest for $image_tag..."
         docker buildx imagetools create \
-          --tag "$ecr_registry:$image_tag" \
-          "$ecr_registry:$image_tag-amd64" \
-          "$ecr_registry:$image_tag-arm64"
+          --tag "$registry:$image_tag" \
+          "$registry:$image_tag-amd64" \
+          "$registry:$image_tag-arm64"
 
-        # Create multi-platform manifest for the Git SHA tag (required for tag-release workflow)
         echo "Creating multi-platform manifest for Git SHA: $git_sha..."
         docker buildx imagetools create \
-          --tag "$ecr_registry:$git_sha" \
-          "$ecr_registry:$git_sha-amd64" \
-          "$ecr_registry:$git_sha-arm64"
+          --tag "$registry:$git_sha" \
+          "$registry:$git_sha-amd64" \
+          "$registry:$git_sha-arm64"
 
         echo "✅ Multi-platform manifests created successfully"
 
     - name: Verify Manifests Contains Both Architectures
       shell: bash
       run: |
-        ecr_registry="${{ inputs.ecr-registry }}"
+        registry="${{ steps.registry.outputs.url }}"
         image_tag="${{ inputs.image-tag }}"
         git_sha="${{ inputs.git-sha }}"
 
@@ -146,7 +173,7 @@ runs:
         fi
 
         echo "🔍 Verifying image-tag manifest contains both architectures..."
-        manifest_output=$(docker buildx imagetools inspect "$ecr_registry:$image_tag")
+        manifest_output=$(docker buildx imagetools inspect "$registry:$image_tag")
 
         if echo "$manifest_output" | grep -q "linux/amd64" && echo "$manifest_output" | grep -q "linux/arm64"; then
           echo "✅ Image-tag manifest verified - contains both linux/amd64 and linux/arm64"
@@ -157,7 +184,7 @@ runs:
         fi
 
         echo "🔍 Verifying git-sha manifest contains both architectures..."
-        manifest_output=$(docker buildx imagetools inspect "$ecr_registry:$git_sha")
+        manifest_output=$(docker buildx imagetools inspect "$registry:$git_sha")
 
         if echo "$manifest_output" | grep -q "linux/amd64" && echo "$manifest_output" | grep -q "linux/arm64"; then
           echo "✅ Git-sha manifest verified - contains both linux/amd64 and linux/arm64"
@@ -168,8 +195,8 @@ runs:
         fi
 
         echo "🔍 Verifying both tags point to the same manifest..."
-        image_tag_digest=$(docker buildx imagetools inspect "$ecr_registry:$image_tag" --raw | sha256sum | awk '{print $1}')
-        git_sha_digest=$(docker buildx imagetools inspect "$ecr_registry:$git_sha" --raw | sha256sum | awk '{print $1}')
+        image_tag_digest=$(docker buildx imagetools inspect "$registry:$image_tag" --raw | sha256sum | awk '{print $1}')
+        git_sha_digest=$(docker buildx imagetools inspect "$registry:$git_sha" --raw | sha256sum | awk '{print $1}')
 
         if [ "$image_tag_digest" = "$git_sha_digest" ]; then
           echo "✅ Both tags point to the same manifest digest"
@@ -191,7 +218,7 @@ runs:
         echo "" >> $GITHUB_STEP_SUMMARY
         echo "| Property | Value |" >> $GITHUB_STEP_SUMMARY
         echo "|----------|-------|" >> $GITHUB_STEP_SUMMARY
-        echo "| **ECR Registry** | \`$ecr_registry\` |" >> $GITHUB_STEP_SUMMARY
+        echo "| **Registry** | \`$registry\` |" >> $GITHUB_STEP_SUMMARY
         echo "| **Image Tag** | \`$image_tag\` |" >> $GITHUB_STEP_SUMMARY
         echo "| **Git SHA** | \`$git_sha\` |" >> $GITHUB_STEP_SUMMARY
         echo "| **Architectures** | \`linux/amd64\`, \`linux/arm64\` |" >> $GITHUB_STEP_SUMMARY
@@ -199,6 +226,5 @@ runs:
         echo "" >> $GITHUB_STEP_SUMMARY
         echo "### Created Manifests" >> $GITHUB_STEP_SUMMARY
         echo "" >> $GITHUB_STEP_SUMMARY
-        echo "- \`$ecr_registry:$image_tag\`" >> $GITHUB_STEP_SUMMARY
-        echo "- \`$ecr_registry:$git_sha\`" >> $GITHUB_STEP_SUMMARY
-
+        echo "- \`$registry:$image_tag\`" >> $GITHUB_STEP_SUMMARY
+        echo "- \`$registry:$git_sha\`" >> $GITHUB_STEP_SUMMARY
