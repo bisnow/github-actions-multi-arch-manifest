@@ -1,21 +1,15 @@
 name: 'Create Multi-Architecture Manifest'
-description: 'Creates and pushes multi-platform Docker manifests for amd64 and arm64 to either ECR or Harbor'
+description: 'Creates and pushes multi-platform Docker manifests for amd64 and arm64 to Harbor'
 inputs:
   image-tag:
     description: 'Image tag to create manifest for'
     required: true
-  ecr-registry:
-    description: 'ECR registry URL. Provide this OR harbor-registry, not both.'
-    required: false
-    default: ''
-  harbor-registry:
-    description: 'Harbor registry URL (e.g., harbor.bisnow.cloud/bisnow/hello-k8s). Provide this OR ecr-registry, not both.'
-    required: false
-    default: ''
-  aws-account:
-    description: 'AWS account name for assuming role (only used when pushing to ECR)'
-    required: false
-    default: 'bisnow'
+  service-name:
+    description: 'Name of sevice for location retrieve images in container repo'
+    required: true
+  namespace:
+    description: 'Namespace of app for Harbor'
+    required: true
   git-sha:
     description: 'Git SHA to create manifest for (defaults to github.sha)'
     required: false
@@ -27,12 +21,14 @@ runs:
     - name: Validate registry inputs
       shell: bash
       run: |
-        if [ -z "${{ inputs.ecr-registry }}" ] && [ -z "${{ inputs.harbor-registry }}" ]; then
-          echo "ERROR: You must provide either ecr-registry or harbor-registry"
+        if [ -z "${{ inputs.service-name }}" ]; then
+          echo "❌ [multi-arch-manifest] Service name not provided. Cannot build manifest without service name."
+          echo "🔎 Solution: Add 'service-name' field to the 'multi-arch-manifest' action."
           exit 1
         fi
-        if [ -n "${{ inputs.ecr-registry }}" ] && [ -n "${{ inputs.harbor-registry }}" ]; then
-          echo "ERROR: Provide ecr-registry OR harbor-registry, not both"
+        if [ -z "${{ inputs.namespace }}" ]; then
+          echo "❌ [multi-arch-manifest] Namespace not provided. Cannot pull from Harbor without namespace."
+          echo "🔎 Solution: Add 'namespace' field to the 'multi-arch-manifest' action."
           exit 1
         fi
 
@@ -40,25 +36,10 @@ runs:
       id: registry
       shell: bash
       run: |
-        if [ -n "${{ inputs.harbor-registry }}" ]; then
-          echo "url=${{ inputs.harbor-registry }}" >> $GITHUB_OUTPUT
-        else
-          echo "url=${{ inputs.ecr-registry }}" >> $GITHUB_OUTPUT
-        fi
+          echo "url=harbor.bisnow.cloud/${{ inputs.namespace }}/${{ inputs.service-name }}" >> $GITHUB_OUTPUT
 
     - name: Checkout Repository
       uses: actions/checkout@v5
-
-    - name: Assume role for AWS Account
-      if: ${{ inputs.harbor-registry == '' }}
-      uses: bisnow/github-actions-assume-role-for-environment@main
-      with:
-        aws-account: ${{ inputs.aws-account }}
-
-    - name: Login to Amazon ECR
-      if: ${{ inputs.harbor-registry == '' }}
-      id: login-ecr
-      uses: aws-actions/amazon-ecr-login@v2
 
     - name: Set up Docker Buildx
       uses: docker/setup-buildx-action@v3
@@ -67,6 +48,7 @@ runs:
       shell: bash
       run: |
         registry="${{ steps.registry.outputs.url }}"
+
         image_tag="${{ inputs.image-tag }}"
         git_sha="${{ inputs.git-sha }}"
 

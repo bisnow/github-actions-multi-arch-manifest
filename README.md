@@ -1,6 +1,6 @@
 # github-actions-multi-arch-manifest
 
-A GitHub Action that creates and pushes multi-platform Docker manifests for amd64 and arm64 architectures in Amazon ECR.
+A GitHub Action that creates and pushes multi-platform Docker manifests for amd64 and arm64 architectures in Harbor.
 
 ## Description
 
@@ -13,8 +13,8 @@ This action combines platform-specific Docker images (`-amd64` and `-arm64`) int
 | Input | Description | Required | Default |
 |-------|-------------|----------|---------|
 | `image-tag` | Image tag to create manifest for | Yes | - |
-| `ecr-registry` | ECR registry URL (e.g., `560285300220.dkr.ecr.us-east-1.amazonaws.com/biscred-api`) | Yes | - |
-| `aws-account` | AWS account name for assuming role | No | `bisnow` |
+| `service-name` | Name of service for location to retrieve images in container repo | Yes | - |
+| `namespace` | Namespace of app for Harbor | Yes | - |
 | `git-sha` | Git SHA to create manifest for | No | `github.sha` |
 
 ## Usage
@@ -30,31 +30,30 @@ create-manifest:
       uses: bisnow/github-actions-multi-arch-manifest@v1.0
       with:
         image-tag: ${{ inputs.image-tag || env.TAG }}
-        ecr-registry: ${{ env.ECR_REGISTRY }}
+        service-name: ${{ env.SERVICE_NAME }}
+        namespace: ${{ env.NAMESPACE }}
 ```
 
 ## Prerequisites
 
-- Platform-specific images must already exist in ECR with the `-amd64` and `-arm64` suffixes
-- AWS credentials must be configured (the action handles ECR login automatically)
-- The action assumes an AWS role using `bisnow/github-actions-assume-role-for-environment@main`
+- Platform-specific images must already exist in Harbor with the `-amd64` and `-arm64` suffixes
+- Harbor authentication must be configured on the runner (authentication is handled by the runner, not the action)
+- Images should be located at `harbor.bisnow.cloud/{namespace}/{service-name}`
 
 ## What It Does
 
-1. Assumes the specified AWS role
-2. Logs into Amazon ECR
-3. Sets up Docker Buildx
-4. **Verifies all architecture images exist** (with retry logic up to 2.5 minutes)
-   - Waits for `{ecr-registry}:{image-tag}-amd64` and `{ecr-registry}:{image-tag}-arm64`
-   - Waits for `{ecr-registry}:{git-sha}-amd64` and `{ecr-registry}:{git-sha}-arm64`
-5. **Creates multi-platform manifests**:
-   - `{ecr-registry}:{image-tag}` from `{image-tag}-amd64` and `{image-tag}-arm64`
-   - `{ecr-registry}:{git-sha}` from `{git-sha}-amd64` and `{git-sha}-arm64`
-6. **Verifies both manifests** were created correctly:
+1. Sets up Docker Buildx
+2. **Verifies all architecture images exist** (with retry logic up to 2.5 minutes)
+   - Waits for `harbor.bisnow.cloud/{namespace}/{service-name}:{image-tag}-amd64` and `{image-tag}-arm64`
+   - Waits for `harbor.bisnow.cloud/{namespace}/{service-name}:{git-sha}-amd64` and `{git-sha}-arm64`
+3. **Creates multi-platform manifests**:
+   - `harbor.bisnow.cloud/{namespace}/{service-name}:{image-tag}` from `{image-tag}-amd64` and `{image-tag}-arm64`
+   - `harbor.bisnow.cloud/{namespace}/{service-name}:{git-sha}` from `{git-sha}-amd64` and `{git-sha}-arm64`
+4. **Verifies both manifests** were created correctly:
    - Confirms both manifests contain `linux/amd64` and `linux/arm64` platforms
    - Verifies both tags reference the same manifest digest (ensuring tag lookup works)
 
-   ## Versioning
+## Versioning
 
 This action uses rolling major version tags. You can pin to:
 
