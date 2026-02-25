@@ -7,8 +7,8 @@ inputs:
   service-name:
     description: 'Name of sevice for location retrieve images in container repo'
     required: true
-  namespace:
-    description: 'Namespace of app for Harbor'
+  business-unit:
+    description: 'business-unit of app for Harbor'
     required: true
   git-sha:
     description: 'Git SHA to create manifest for (defaults to github.sha)'
@@ -26,9 +26,9 @@ runs:
           echo "🔎 Solution: Add 'service-name' field to the 'multi-arch-manifest' action."
           exit 1
         fi
-        if [ -z "${{ inputs.namespace }}" ]; then
-          echo "❌ [multi-arch-manifest] Namespace not provided. Cannot pull from Harbor without namespace."
-          echo "🔎 Solution: Add 'namespace' field to the 'multi-arch-manifest' action."
+        if [ -z "${{ inputs.business-unit }}" ]; then
+          echo "❌ [multi-arch-manifest] business-unit not provided. Cannot pull from Harbor without business-unit."
+          echo "🔎 Solution: Add 'business-unit' field to the 'multi-arch-manifest' action."
           exit 1
         fi
 
@@ -36,7 +36,7 @@ runs:
       id: registry
       shell: bash
       run: |
-          echo "url=harbor.bisnow.cloud/${{ inputs.namespace }}/${{ inputs.service-name }}" >> $GITHUB_OUTPUT
+          echo "url=harbor.bisnow.cloud/${{ inputs.business-unit }}/${{ inputs.service-name }}" >> $GITHUB_OUTPUT
 
     - name: Checkout Repository
       uses: actions/checkout@v5

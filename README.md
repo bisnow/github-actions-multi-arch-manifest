@@ -14,7 +14,7 @@ This action combines platform-specific Docker images (`-amd64` and `-arm64`) int
 |-------|-------------|----------|---------|
 | `image-tag` | Image tag to create manifest for | Yes | - |
 | `service-name` | Name of service for location to retrieve images in container repo | Yes | - |
-| `namespace` | Namespace of app for Harbor | Yes | - |
+| `business-unit` | Business unit of app for Harbor | Yes | - |
 | `git-sha` | Git SHA to create manifest for | No | `github.sha` |
 
 ## Usage
@@ -31,24 +31,24 @@ create-manifest:
       with:
         image-tag: ${{ inputs.image-tag || env.TAG }}
         service-name: ${{ env.SERVICE_NAME }}
-        namespace: ${{ env.NAMESPACE }}
+        business-unit: ${{ env.BUSINESS_UNIT }}
 ```
 
 ## Prerequisites
 
 - Platform-specific images must already exist in Harbor with the `-amd64` and `-arm64` suffixes
 - Harbor authentication must be configured on the runner (authentication is handled by the runner, not the action)
-- Images should be located at `harbor.bisnow.cloud/{namespace}/{service-name}`
+- Images should be located at `harbor.bisnow.cloud/{business-unit}/{service-name}`
 
 ## What It Does
 
 1. Sets up Docker Buildx
 2. **Verifies all architecture images exist** (with retry logic up to 2.5 minutes)
-   - Waits for `harbor.bisnow.cloud/{namespace}/{service-name}:{image-tag}-amd64` and `{image-tag}-arm64`
-   - Waits for `harbor.bisnow.cloud/{namespace}/{service-name}:{git-sha}-amd64` and `{git-sha}-arm64`
+   - Waits for `harbor.bisnow.cloud/{business-unit}/{service-name}:{image-tag}-amd64` and `{image-tag}-arm64`
+   - Waits for `harbor.bisnow.cloud/{business-unit}/{service-name}:{git-sha}-amd64` and `{git-sha}-arm64`
 3. **Creates multi-platform manifests**:
-   - `harbor.bisnow.cloud/{namespace}/{service-name}:{image-tag}` from `{image-tag}-amd64` and `{image-tag}-arm64`
-   - `harbor.bisnow.cloud/{namespace}/{service-name}:{git-sha}` from `{git-sha}-amd64` and `{git-sha}-arm64`
+   - `harbor.bisnow.cloud/{business-unit}/{service-name}:{image-tag}` from `{image-tag}-amd64` and `{image-tag}-arm64`
+   - `harbor.bisnow.cloud/{business-unit}/{service-name}:{git-sha}` from `{git-sha}-amd64` and `{git-sha}-arm64`
 4. **Verifies both manifests** were created correctly:
    - Confirms both manifests contain `linux/amd64` and `linux/arm64` platforms
    - Verifies both tags reference the same manifest digest (ensuring tag lookup works)
