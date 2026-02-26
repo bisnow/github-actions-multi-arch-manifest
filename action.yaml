@@ -1,25 +1,23 @@
 name: 'Create Multi-Architecture Manifest'
-description: 'Creates and pushes multi-platform Docker manifests for amd64 and arm64 to either ECR or Harbor'
+description: 'Creates and pushes multi-platform Docker manifests for amd64 and arm64 to Harbor'
 inputs:
   image-tag:
     description: 'Image tag to create manifest for'
     required: true
-  ecr-registry:
-    description: 'ECR registry URL. Provide this OR harbor-registry, not both.'
-    required: false
-    default: ''
-  harbor-registry:
-    description: 'Harbor registry URL (e.g., harbor.bisnow.cloud/bisnow/hello-k8s). Provide this OR ecr-registry, not both.'
-    required: false
-    default: ''
-  aws-account:
-    description: 'AWS account name for assuming role (only used when pushing to ECR)'
-    required: false
-    default: 'bisnow'
+  service-name:
+    description: 'Name of service for location retrieve images in container repo'
+    required: true
+  business-unit:
+    description: 'Business Unit of app for Harbor'
+    required: true
   git-sha:
     description: 'Git SHA to create manifest for (defaults to github.sha)'
     required: false
     default: ''
+  aws-account:
+    description: 'AWS account name to assume role for'
+    required: false
+    default: 'bisnow'
 
 runs:
   using: 'composite'
@@ -27,12 +25,14 @@ runs:
     - name: Validate registry inputs
       shell: bash
       run: |
-        if [ -z "${{ inputs.ecr-registry }}" ] && [ -z "${{ inputs.harbor-registry }}" ]; then
-          echo "ERROR: You must provide either ecr-registry or harbor-registry"
+        if [ -z "${{ inputs.service-name }}" ]; then
+          echo "❌ [multi-arch-manifest] Service name not provided. Cannot build manifest without service name."
+          echo "🔎 Solution: Add 'service-name' field to the 'multi-arch-manifest' action."
           exit 1
         fi
-        if [ -n "${{ inputs.ecr-registry }}" ] && [ -n "${{ inputs.harbor-registry }}" ]; then
-          echo "ERROR: Provide ecr-registry OR harbor-registry, not both"
+        if [ -z "${{ inputs.business-unit }}" ]; then
+          echo "❌ [multi-arch-manifest] business-unit not provided. Cannot pull from Harbor without business-unit."
+          echo "🔎 Solution: Add 'business-unit' field to the 'multi-arch-manifest' action."
           exit 1
         fi
 
@@ -40,33 +40,29 @@ runs:
       id: registry
       shell: bash
       run: |
-        if [ -n "${{ inputs.harbor-registry }}" ]; then
-          echo "url=${{ inputs.harbor-registry }}" >> $GITHUB_OUTPUT
-        else
-          echo "url=${{ inputs.ecr-registry }}" >> $GITHUB_OUTPUT
-        fi
+          echo "harbor_url=harbor.bisnow.cloud/${{ inputs.business-unit }}/${{ inputs.service-name }}" >> $GITHUB_OUTPUT
+          echo "ecr_url=560285300220.dkr.ecr.us-east-1.amazonaws.com/${{ inputs.service-name }}" >> $GITHUB_OUTPUT
 
     - name: Checkout Repository
       uses: actions/checkout@v5
 
+    - name: Set up Docker Buildx
+      uses: docker/setup-buildx-action@v3
+    
     - name: Assume role for AWS Account
-      if: ${{ inputs.harbor-registry == '' }}
       uses: bisnow/github-actions-assume-role-for-environment@main
       with:
         aws-account: ${{ inputs.aws-account }}
 
     - name: Login to Amazon ECR
-      if: ${{ inputs.harbor-registry == '' }}
       id: login-ecr
       uses: aws-actions/amazon-ecr-login@v2
-
-    - name: Set up Docker Buildx
-      uses: docker/setup-buildx-action@v3
 
     - name: Verify Architecture Images Exist
       shell: bash
       run: |
-        registry="${{ steps.registry.outputs.url }}"
+        harbor_registry="${{ steps.registry.outputs.harbor_url }}"
+        ecr_registry="${{ steps.registry.outputs.ecr_url }}"
         image_tag="${{ inputs.image-tag }}"
         git_sha="${{ inputs.git-sha }}"
 
@@ -80,44 +76,80 @@ runs:
         sleep_time=5
 
         while [ $attempt -lt $max_attempts ]; do
-          tag_amd64_exists=false
-          tag_arm64_exists=false
-          sha_amd64_exists=false
-          sha_arm64_exists=false
+          harbor_tag_amd64_exists=false
+          harbor_tag_arm64_exists=false
+          harbor_sha_amd64_exists=false
+          harbor_sha_arm64_exists=false
+          ecr_tag_amd64_exists=false
+          ecr_tag_arm64_exists=false
+          ecr_sha_amd64_exists=false
+          ecr_sha_arm64_exists=false
 
-          echo "Checking image-tag AMD64 image..."
-          if docker buildx imagetools inspect "$registry:$image_tag-amd64" >/dev/null 2>&1; then
-            echo "✅ Found: $registry:$image_tag-amd64"
-            tag_amd64_exists=true
+          echo "Checking image-tag AMD64 image in harbor..."
+          if docker buildx imagetools inspect "$harbor_registry:$image_tag-amd64" >/dev/null 2>&1; then
+            echo "✅ Found: $harbor_registry:$image_tag-amd64"
+            harbor_tag_amd64_exists=true
           else
-            echo "⏳ Waiting for: $registry:$image_tag-amd64"
+            echo "⏳ Waiting for: $harbor_registry:$image_tag-amd64"
           fi
 
-          echo "Checking image-tag ARM64 image..."
-          if docker buildx imagetools inspect "$registry:$image_tag-arm64" >/dev/null 2>&1; then
-            echo "✅ Found: $registry:$image_tag-arm64"
-            tag_arm64_exists=true
+          echo "Checking image-tag AMD64 image in ecr..."
+          if docker buildx imagetools inspect "$ecr_registry:$image_tag-amd64" >/dev/null 2>&1; then
+            echo "✅ Found: $ecr_registry:$image_tag-amd64"
+            ecr_tag_amd64_exists=true
           else
-            echo "⏳ Waiting for: $registry:$image_tag-arm64"
+            echo "⏳ Waiting for: $ecr_registry:$image_tag-amd64"
           fi
 
-          echo "Checking git-sha AMD64 image..."
-          if docker buildx imagetools inspect "$registry:$git_sha-amd64" >/dev/null 2>&1; then
-            echo "✅ Found: $registry:$git_sha-amd64"
-            sha_amd64_exists=true
+          echo "Checking image-tag ARM64 image in harbor..."
+          if docker buildx imagetools inspect "$harbor_registry:$image_tag-arm64" >/dev/null 2>&1; then
+            echo "✅ Found: $harbor_registry:$image_tag-arm64"
+            harbor_tag_arm64_exists=true
           else
-            echo "⏳ Waiting for: $registry:$git_sha-amd64"
+            echo "⏳ Waiting for: $harbor_registry:$image_tag-arm64"
           fi
 
-          echo "Checking git-sha ARM64 image..."
-          if docker buildx imagetools inspect "$registry:$git_sha-arm64" >/dev/null 2>&1; then
-            echo "✅ Found: $registry:$git_sha-arm64"
-            sha_arm64_exists=true
+          echo "Checking image-tag ARM64 image in ecr..."
+          if docker buildx imagetools inspect "$ecr_registry:$image_tag-arm64" >/dev/null 2>&1; then
+            echo "✅ Found: $ecr_registry:$image_tag-arm64"
+            ecr_tag_arm64_exists=true
           else
-            echo "⏳ Waiting for: $registry:$git_sha-arm64"
+            echo "⏳ Waiting for: $ecr_registry:$image_tag-arm64"
           fi
 
-          if [ "$tag_amd64_exists" = true ] && [ "$tag_arm64_exists" = true ] && [ "$sha_amd64_exists" = true ] && [ "$sha_arm64_exists" = true ]; then
+          echo "Checking git-sha AMD64 image in harbor..."
+          if docker buildx imagetools inspect "$harbor_registry:$git_sha-amd64" >/dev/null 2>&1; then
+            echo "✅ Found: $harbor_registry:$git_sha-amd64"
+            harbor_sha_amd64_exists=true
+          else
+            echo "⏳ Waiting for: $harbor_registry:$git_sha-amd64"
+          fi
+          
+          echo "Checking git-sha AMD64 image in ecr..."
+          if docker buildx imagetools inspect "$ecr_registry:$git_sha-amd64" >/dev/null 2>&1; then
+            echo "✅ Found: $ecr_registry:$git_sha-amd64"
+            ecr_sha_amd64_exists=true
+          else
+            echo "⏳ Waiting for: $ecr_registry:$git_sha-amd64"
+          fi
+
+          echo "Checking git-sha ARM64 image in harbor..."
+          if docker buildx imagetools inspect "$harbor_registry:$git_sha-arm64" >/dev/null 2>&1; then
+            echo "✅ Found: $harbor_registry:$git_sha-arm64"
+            harbor_sha_arm64_exists=true
+          else
+            echo "⏳ Waiting for: $harbor_registry:$git_sha-arm64"
+          fi
+
+          echo "Checking git-sha ARM64 image in ecr..."
+          if docker buildx imagetools inspect "$ecr_registry:$git_sha-arm64" >/dev/null 2>&1; then
+            echo "✅ Found: $ecr_registry:$git_sha-arm64"
+            ecr_sha_arm64_exists=true
+          else
+            echo "⏳ Waiting for: $ecr_registry:$git_sha-arm64"
+          fi
+
+          if [ "$harbor_tag_amd64_exists" = true ] && [ "$harbor_tag_arm64_exists" = true ] && [ "$harbor_sha_amd64_exists" = true ] && [ "$harbor_sha_arm64_exists" = true ] && [ "$ecr_tag_amd64_exists" = true ] && [ "$ecr_tag_arm64_exists" = true ] && [ "$ecr_sha_amd64_exists" = true ] && [ "$ecr_sha_arm64_exists" = true ]; then
             echo "✅ All architecture images are available!"
             exit 0
           fi
@@ -130,16 +162,21 @@ runs:
         done
 
         echo "❌ Timeout waiting for architecture images to be available"
-        echo "Image-tag AMD64 available: $tag_amd64_exists"
-        echo "Image-tag ARM64 available: $tag_arm64_exists"
-        echo "Git-SHA AMD64 available: $sha_amd64_exists"
-        echo "Git-SHA ARM64 available: $sha_arm64_exists"
+        echo "Harbor Image-tag AMD64 available: $harbor_tag_amd64_exists"
+        echo "Harbor Image-tag ARM64 available: $harbor_tag_arm64_exists"
+        echo "Harbor Git-SHA AMD64 available: $harbor_sha_amd64_exists"
+        echo "Harbor Git-SHA ARM64 available: $harbor_sha_arm64_exists"
+        echo "ECR Image-tag AMD64 available: $ecr_tag_amd64_exists"
+        echo "ECR Image-tag ARM64 available: $ecr_tag_arm64_exists"
+        echo "ECR Git-SHA AMD64 available: $ecr_sha_amd64_exists"
+        echo "ECR Git-SHA ARM64 available: $ecr_sha_arm64_exists"
         exit 1
 
     - name: Create Multi-Platform Manifests
       shell: bash
       run: |
-        registry="${{ steps.registry.outputs.url }}"
+        harbor_registry="${{ steps.registry.outputs.harbor_url }}"
+        ecr_registry="${{ steps.registry.outputs.ecr_url }}"
         image_tag="${{ inputs.image-tag }}"
         git_sha="${{ inputs.git-sha }}"
 
@@ -147,24 +184,37 @@ runs:
           git_sha="${{ github.sha }}"
         fi
 
-        echo "Creating multi-platform manifest for $image_tag..."
+        echo "Creating multi-platform manifest for $image_tag for Harbor..."
         docker buildx imagetools create \
-          --tag "$registry:$image_tag" \
-          "$registry:$image_tag-amd64" \
-          "$registry:$image_tag-arm64"
+          --tag "$harbor_registry:$image_tag" \
+          "$harbor_registry:$image_tag-amd64" \
+          "$harbor_registry:$image_tag-arm64"
+          
+        echo "Creating multi-platform manifest for $image_tag for ECR..."
+        docker buildx imagetools create \
+          --tag "$ecr_registry:$image_tag" \
+          "$ecr_registry:$image_tag-amd64" \
+          "$ecr_registry:$image_tag-arm64"
 
-        echo "Creating multi-platform manifest for Git SHA: $git_sha..."
+        echo "Creating multi-platform manifest for Git SHA for Harbor: $git_sha..."
         docker buildx imagetools create \
-          --tag "$registry:$git_sha" \
-          "$registry:$git_sha-amd64" \
-          "$registry:$git_sha-arm64"
+          --tag "$harbor_registry:$git_sha" \
+          "$harbor_registry:$git_sha-amd64" \
+          "$harbor_registry:$git_sha-arm64"
+
+        echo "Creating multi-platform manifest for Git SHA for ECR: $git_sha..."
+        docker buildx imagetools create \
+          --tag "$ecr_registry:$git_sha" \
+          "$ecr_registry:$git_sha-amd64" \
+          "$ecr_registry:$git_sha-arm64"
 
         echo "✅ Multi-platform manifests created successfully"
 
     - name: Verify Manifests Contains Both Architectures
       shell: bash
       run: |
-        registry="${{ steps.registry.outputs.url }}"
+        harbor_registry="${{ steps.registry.outputs.harbor_url }}"
+        ecr_registry="${{ steps.registry.outputs.ecr_url }}"
         image_tag="${{ inputs.image-tag }}"
         git_sha="${{ inputs.git-sha }}"
 
@@ -173,37 +223,66 @@ runs:
         fi
 
         echo "🔍 Verifying image-tag manifest contains both architectures..."
-        manifest_output=$(docker buildx imagetools inspect "$registry:$image_tag")
+        harbor_manifest_output=$(docker buildx imagetools inspect "$harbor_registry:$image_tag")
+        ecr_manifest_output=$(docker buildx imagetools inspect "$ecr_registry:$image_tag")
 
-        if echo "$manifest_output" | grep -q "linux/amd64" && echo "$manifest_output" | grep -q "linux/arm64"; then
-          echo "✅ Image-tag manifest verified - contains both linux/amd64 and linux/arm64"
+        if echo "$harbor_manifest_output" | grep -q "linux/amd64" && echo "$harbor_manifest_output" | grep -q "linux/arm64"; then
+          echo "✅ Harbor Image-tag manifest verified - contains both linux/amd64 and linux/arm64"
         else
-          echo "❌ Image-tag manifest verification failed - missing one or both architectures"
-          echo "$manifest_output"
+          echo "❌ Harbor Image-tag manifest verification failed - missing one or both architectures"
+          echo "$harbor_manifest_output"
+          exit 1
+        fi
+
+        if echo "$ecr_manifest_output" | grep -q "linux/amd64" && echo "$ecr_manifest_output" | grep -q "linux/arm64"; then
+          echo "✅ ECR Image-tag manifest verified - contains both linux/amd64 and linux/arm64"
+        else
+          echo "❌ ECR Image-tag manifest verification failed - missing one or both architectures"
+          echo "$ecr_manifest_output"
           exit 1
         fi
 
         echo "🔍 Verifying git-sha manifest contains both architectures..."
-        manifest_output=$(docker buildx imagetools inspect "$registry:$git_sha")
+        harbor_manifest_output=$(docker buildx imagetools inspect "$harbor_registry:$git_sha")
+        ecr_manifest_output=$(docker buildx imagetools inspect "$ecr_registry:$git_sha")
 
-        if echo "$manifest_output" | grep -q "linux/amd64" && echo "$manifest_output" | grep -q "linux/arm64"; then
-          echo "✅ Git-sha manifest verified - contains both linux/amd64 and linux/arm64"
+        if echo "$harbor_manifest_output" | grep -q "linux/amd64" && echo "$harbor_manifest_output" | grep -q "linux/arm64"; then
+          echo "✅ Harbor Git-sha manifest verified - contains both linux/amd64 and linux/arm64"
         else
-          echo "❌ Git-sha manifest verification failed - missing one or both architectures"
-          echo "$manifest_output"
+          echo "❌ Harbor Git-sha manifest verification failed - missing one or both architectures"
+          echo "$harbor_manifest_output"
+          exit 1
+        fi
+
+        if echo "$ecr_manifest_output" | grep -q "linux/amd64" && echo "$ecr_manifest_output" | grep -q "linux/arm64"; then
+          echo "✅ ECR Git-sha manifest verified - contains both linux/amd64 and linux/arm64"
+        else
+          echo "❌ ECR Git-sha manifest verification failed - missing one or both architectures"
+          echo "$ecr_manifest_output"
           exit 1
         fi
 
         echo "🔍 Verifying both tags point to the same manifest..."
-        image_tag_digest=$(docker buildx imagetools inspect "$registry:$image_tag" --raw | sha256sum | awk '{print $1}')
-        git_sha_digest=$(docker buildx imagetools inspect "$registry:$git_sha" --raw | sha256sum | awk '{print $1}')
+        harbor_image_tag_digest=$(docker buildx imagetools inspect "$harbor_registry:$image_tag" --raw | sha256sum | awk '{print $1}')
+        harbor_git_sha_digest=$(docker buildx imagetools inspect "$harbor_registry:$git_sha" --raw | sha256sum | awk '{print $1}')
+        ecr_image_tag_digest=$(docker buildx imagetools inspect "$ecr_registry:$image_tag" --raw | sha256sum | awk '{print $1}')
+        ecr_git_sha_digest=$(docker buildx imagetools inspect "$ecr_registry:$git_sha" --raw | sha256sum | awk '{print $1}')
 
-        if [ "$image_tag_digest" = "$git_sha_digest" ]; then
-          echo "✅ Both tags point to the same manifest digest"
+        if [ "$harbor_image_tag_digest" = "$harbor_git_sha_digest" ]; then
+          echo "✅ Both Harbor tags point to the same manifest digest"
         else
-          echo "⚠️ Warning: Tags point to different manifests"
-          echo "Image tag digest: $image_tag_digest"
-          echo "Git SHA digest: $git_sha_digest"
+          echo "⚠️ Warning: Harbor Tags point to different manifests"
+          echo "Image tag digest: $harbor_image_tag_digest"
+          echo "Git SHA digest: $harbor_git_sha_digest"
+          exit 1
+        fi
+
+        if [ "$ecr_image_tag_digest" = "$ecr_git_sha_digest" ]; then
+          echo "✅ Both ECR tags point to the same manifest digest"
+        else
+          echo "⚠️ Warning: ECR Tags point to different manifests"
+          echo "Image tag digest: $ecr_image_tag_digest"
+          echo "Git SHA digest: $ecr_git_sha_digest"
           exit 1
         fi
 
@@ -211,20 +290,25 @@ runs:
         echo "Summary:"
         echo "   Tags: $image_tag, $git_sha"
         echo "   Architectures: linux/amd64, linux/arm64"
-        echo "   Digest: sha256:$image_tag_digest"
+        echo "   Harbor Digest: sha256:$harbor_image_tag_digest"
+        echo "   ECR Digest: sha256:$ecr_image_tag_digest"
 
         # Write GitHub Step Summary
         echo "## Multi-Architecture Manifest Summary" >> $GITHUB_STEP_SUMMARY
         echo "" >> $GITHUB_STEP_SUMMARY
         echo "| Property | Value |" >> $GITHUB_STEP_SUMMARY
         echo "|----------|-------|" >> $GITHUB_STEP_SUMMARY
-        echo "| **Registry** | \`$registry\` |" >> $GITHUB_STEP_SUMMARY
+        echo "| **Harbor Registry** | \`$harbor_registry\` |" >> $GITHUB_STEP_SUMMARY
+        echo "| **ECR Registry** | \`$ecr_registry\` |" >> $GITHUB_STEP_SUMMARY
         echo "| **Image Tag** | \`$image_tag\` |" >> $GITHUB_STEP_SUMMARY
         echo "| **Git SHA** | \`$git_sha\` |" >> $GITHUB_STEP_SUMMARY
         echo "| **Architectures** | \`linux/amd64\`, \`linux/arm64\` |" >> $GITHUB_STEP_SUMMARY
-        echo "| **Manifest Digest** | \`sha256:$image_tag_digest\` |" >> $GITHUB_STEP_SUMMARY
+        echo "| **Harbor Manifest Digest** | \`sha256:$harbor_image_tag_digest\` |" >> $GITHUB_STEP_SUMMARY
+        echo "| **ECR Manifest Digest** | \`sha256:$ecr_image_tag_digest\` |" >> $GITHUB_STEP_SUMMARY
         echo "" >> $GITHUB_STEP_SUMMARY
         echo "### Created Manifests" >> $GITHUB_STEP_SUMMARY
         echo "" >> $GITHUB_STEP_SUMMARY
-        echo "- \`$registry:$image_tag\`" >> $GITHUB_STEP_SUMMARY
-        echo "- \`$registry:$git_sha\`" >> $GITHUB_STEP_SUMMARY
+        echo "- \`$harbor_registry:$image_tag\`" >> $GITHUB_STEP_SUMMARY
+        echo "- \`$harbor_registry:$git_sha\`" >> $GITHUB_STEP_SUMMARY
+        echo "- \`$ecr_registry:$image_tag\`" >> $GITHUB_STEP_SUMMARY
+        echo "- \`$ecr_registry:$git_sha\`" >> $GITHUB_STEP_SUMMARY
