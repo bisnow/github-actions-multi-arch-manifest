@@ -37,7 +37,7 @@ runs:
       shell: bash
       run: |
           echo "harbor_url=harbor.bisnow.cloud/${{ inputs.business-unit }}/${{ inputs.service-name }}" >> $GITHUB_OUTPUT
-          echo "ecr_url="560285300220.dkr.ecr.us-east-1.amazonaws.com/${{ inputs.service-name }}" >> $GITHUB_OUTPUT
+          echo "ecr_url=560285300220.dkr.ecr.us-east-1.amazonaws.com/${{ inputs.service-name }}" >> $GITHUB_OUTPUT
 
     - name: Checkout Repository
       uses: actions/checkout@v5
