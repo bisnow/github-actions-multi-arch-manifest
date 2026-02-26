@@ -14,6 +14,10 @@ inputs:
     description: 'Git SHA to create manifest for (defaults to github.sha)'
     required: false
     default: ''
+  aws-account:
+    description: 'AWS account name to assume role for'
+    required: false
+    default: 'bisnow'
 
 runs:
   using: 'composite'
@@ -44,6 +48,15 @@ runs:
 
     - name: Set up Docker Buildx
       uses: docker/setup-buildx-action@v3
+    
+    - name: Assume role for AWS Account
+      uses: bisnow/github-actions-assume-role-for-environment@main
+      with:
+        aws-account: ${{ inputs.aws-account }}
+
+    - name: Login to Amazon ECR
+      id: login-ecr
+      uses: aws-actions/amazon-ecr-login@v2
 
     - name: Verify Architecture Images Exist
       shell: bash
