@@ -207,28 +207,28 @@ runs:
         fi
 
         echo "Creating multi-platform manifest for $image_tag for Harbor..."
-        docker buildx imagetools create \
-          --tag "$harbor_registry:$image_tag" \
+        docker manifest create --amend "$harbor_registry:$image_tag" \
           "$harbor_registry:$image_tag-amd64" \
           "$harbor_registry:$image_tag-arm64"
-          
+        docker manifest push "$harbor_registry:$image_tag"
+
         echo "Creating multi-platform manifest for $image_tag for ECR..."
-        docker buildx imagetools create \
-          --tag "$ecr_registry:$image_tag" \
+        docker manifest create --amend "$ecr_registry:$image_tag" \
           "$ecr_registry:$image_tag-amd64" \
           "$ecr_registry:$image_tag-arm64"
+        docker manifest push "$ecr_registry:$image_tag"
 
         echo "Creating multi-platform manifest for Git SHA for Harbor: $git_sha..."
-        docker buildx imagetools create \
-          --tag "$harbor_registry:$git_sha" \
+        docker manifest create --amend "$harbor_registry:$git_sha" \
           "$harbor_registry:$git_sha-amd64" \
           "$harbor_registry:$git_sha-arm64"
+        docker manifest push "$harbor_registry:$git_sha"
 
         echo "Creating multi-platform manifest for Git SHA for ECR: $git_sha..."
-        docker buildx imagetools create \
-          --tag "$ecr_registry:$git_sha" \
+        docker manifest create --amend "$ecr_registry:$git_sha" \
           "$ecr_registry:$git_sha-amd64" \
           "$ecr_registry:$git_sha-arm64"
+        docker manifest push "$ecr_registry:$git_sha"
 
         echo "✅ Multi-platform manifests created successfully"
 
