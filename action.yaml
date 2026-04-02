@@ -48,7 +48,21 @@ runs:
 
     - name: Set up Docker Buildx
       uses: docker/setup-buildx-action@v4
-    
+
+    - name: Login to Harbor
+      shell: bash
+      run: |
+        if [ -f "$HOME/.docker/config.json" ]; then
+          HARBOR_AUTH=$(cat "$HOME/.docker/config.json" | jq -r '.auths["harbor.bisnow.cloud"].auth' | base64 -d)
+          HARBOR_USER="${HARBOR_AUTH%%:*}"
+          HARBOR_PASS="${HARBOR_AUTH#*:}"
+          echo "$HARBOR_PASS" | docker login harbor.bisnow.cloud -u "$HARBOR_USER" --password-stdin
+        else
+          echo "❌ No Docker config found at $HOME/.docker/config.json"
+          echo "🔎 Ensure the runner has Harbor credentials configured."
+          exit 1
+        fi
+
     - name: Assume role for AWS Account
       uses: bisnow/github-actions-assume-role-for-environment@main
       with:
