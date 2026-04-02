@@ -46,9 +46,6 @@ runs:
     - name: Checkout Repository
       uses: actions/checkout@v6
 
-    - name: Set up Docker Buildx
-      uses: docker/setup-buildx-action@v4
-
     - name: Login to Harbor
       shell: bash
       run: |
@@ -63,6 +60,9 @@ runs:
           exit 1
         fi
 
+    - name: Set up Docker Buildx
+      uses: docker/setup-buildx-action@v4
+
     - name: Assume role for AWS Account
       uses: bisnow/github-actions-assume-role-for-environment@main
       with:
@@ -71,6 +71,14 @@ runs:
     - name: Login to Amazon ECR
       id: login-ecr
       uses: aws-actions/amazon-ecr-login@v2
+
+    - name: Re-login to Harbor
+      shell: bash
+      run: |
+        HARBOR_AUTH=$(cat "$HOME/.docker/config.json" | jq -r '.auths["harbor.bisnow.cloud"].auth' | base64 -d)
+        HARBOR_USER="${HARBOR_AUTH%%:*}"
+        HARBOR_PASS="${HARBOR_AUTH#*:}"
+        echo "$HARBOR_PASS" | docker login harbor.bisnow.cloud -u "$HARBOR_USER" --password-stdin
 
     - name: Verify Architecture Images Exist
       shell: bash
