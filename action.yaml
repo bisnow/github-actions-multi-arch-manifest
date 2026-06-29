@@ -67,9 +67,9 @@ runs:
       if: ${{ inputs.harbor-registry != '' }}
       shell: bash
       run: |
-        # setup-buildx-action@v4 drops the Harbor credentials that buildx
-        # imagetools needs for the push/HEAD path, so re-establish them from
-        # the runner's pre-baked Docker config before creating manifests.
+        # Ensure crane has fresh Harbor push credentials. crane reads
+        # ~/.docker/config.json, so re-establish the login from the runner's
+        # pre-baked Docker config before creating manifests.
         if [ -f "$HOME/.docker/config.json" ]; then
           HARBOR_AUTH=$(jq -r '.auths["harbor.bisnow.cloud"].auth' "$HOME/.docker/config.json" | base64 -d)
           HARBOR_USER="${HARBOR_AUTH%%:*}"
@@ -165,17 +165,22 @@ runs:
           git_sha="${{ github.sha }}"
         fi
 
+        # Harbor 2.14.2 returns 401 (not 404) for non-existent blobs, which
+        # makes `docker buildx imagetools create` fail its blob HEAD checks.
+        # crane index append tolerates this, so use it for manifest creation.
         echo "Creating multi-platform manifest for $image_tag..."
-        docker buildx imagetools create \
+        crane index append \
           --tag "$registry:$image_tag" \
-          "$registry:$image_tag-amd64" \
-          "$registry:$image_tag-arm64"
+          --manifest "$registry:$image_tag-amd64" \
+          --manifest "$registry:$image_tag-arm64" \
+          --flatten
 
         echo "Creating multi-platform manifest for Git SHA: $git_sha..."
-        docker buildx imagetools create \
+        crane index append \
           --tag "$registry:$git_sha" \
-          "$registry:$git_sha-amd64" \
-          "$registry:$git_sha-arm64"
+          --manifest "$registry:$git_sha-amd64" \
+          --manifest "$registry:$git_sha-arm64" \
+          --flatten
 
         echo "✅ Multi-platform manifests created successfully"
 
