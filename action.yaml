@@ -53,11 +53,31 @@ runs:
     - name: Login to Harbor
       shell: bash
       run: |
+        # Harbor's registry/token service intermittently returns 401/503/timeouts
+        # while its backing database flaps. Credentials are valid; retry so a
+        # transient blip doesn't fail the whole run.
+        retry() {
+          local max=5 delay=5 n=1
+          until "$@"; do
+            if [ "$n" -ge "$max" ]; then
+              echo "❌ Command failed after $n attempts: $*"
+              return 1
+            fi
+            echo "⏳ Attempt $n/$max failed; retrying in ${delay}s..."
+            sleep "$delay"
+            n=$((n + 1))
+            delay=$((delay * 2))
+          done
+        }
+        harbor_login() {
+          local auth user pass
+          auth=$(jq -r '.auths["harbor.bisnow.cloud"].auth' "$HOME/.docker/config.json" | base64 -d)
+          user="${auth%%:*}"
+          pass="${auth#*:}"
+          echo "$pass" | docker login harbor.bisnow.cloud -u "$user" --password-stdin
+        }
         if [ -f "$HOME/.docker/config.json" ]; then
-          HARBOR_AUTH=$(cat "$HOME/.docker/config.json" | jq -r '.auths["harbor.bisnow.cloud"].auth' | base64 -d)
-          HARBOR_USER="${HARBOR_AUTH%%:*}"
-          HARBOR_PASS="${HARBOR_AUTH#*:}"
-          echo "$HARBOR_PASS" | docker login harbor.bisnow.cloud -u "$HARBOR_USER" --password-stdin
+          retry harbor_login
         else
           echo "❌ No Docker config found at $HOME/.docker/config.json"
           echo "🔎 Ensure the runner has Harbor credentials configured."
@@ -82,10 +102,29 @@ runs:
       if: ${{ inputs.only-harbor != 'true' }}
       shell: bash
       run: |
-        HARBOR_AUTH=$(cat "$HOME/.docker/config.json" | jq -r '.auths["harbor.bisnow.cloud"].auth' | base64 -d)
-        HARBOR_USER="${HARBOR_AUTH%%:*}"
-        HARBOR_PASS="${HARBOR_AUTH#*:}"
-        echo "$HARBOR_PASS" | docker login harbor.bisnow.cloud -u "$HARBOR_USER" --password-stdin
+        # ECR login above can reset the shared docker config; re-establish the
+        # Harbor session. Retry to ride out transient Harbor auth failures.
+        retry() {
+          local max=5 delay=5 n=1
+          until "$@"; do
+            if [ "$n" -ge "$max" ]; then
+              echo "❌ Command failed after $n attempts: $*"
+              return 1
+            fi
+            echo "⏳ Attempt $n/$max failed; retrying in ${delay}s..."
+            sleep "$delay"
+            n=$((n + 1))
+            delay=$((delay * 2))
+          done
+        }
+        harbor_login() {
+          local auth user pass
+          auth=$(jq -r '.auths["harbor.bisnow.cloud"].auth' "$HOME/.docker/config.json" | base64 -d)
+          user="${auth%%:*}"
+          pass="${auth#*:}"
+          echo "$pass" | docker login harbor.bisnow.cloud -u "$user" --password-stdin
+        }
+        retry harbor_login
 
     - name: Verify Architecture Images Exist
       shell: bash
@@ -165,10 +204,25 @@ runs:
 
         tags=("$image_tag" "$git_sha")
 
+        # crane push can hit transient Harbor 401/503s; retry each append.
+        retry() {
+          local max=5 delay=5 n=1
+          until "$@"; do
+            if [ "$n" -ge "$max" ]; then
+              echo "❌ Command failed after $n attempts: $*"
+              return 1
+            fi
+            echo "⏳ Attempt $n/$max failed; retrying in ${delay}s..."
+            sleep "$delay"
+            n=$((n + 1))
+            delay=$((delay * 2))
+          done
+        }
+
         for registry in "${registries[@]}"; do
           for tag in "${tags[@]}"; do
             echo "Creating multi-platform manifest for $registry:$tag..."
-            crane index append \
+            retry crane index append \
               --tag "$registry:$tag" \
               --manifest "$registry:$tag-amd64" \
               --manifest "$registry:$tag-arm64" \
@@ -211,12 +265,25 @@ runs:
             fi
           done
 
-          tag_digest=$(docker buildx imagetools inspect "$registry:$image_tag" --raw | sha256sum | awk '{print $1}')
-          sha_digest=$(docker buildx imagetools inspect "$registry:$git_sha" --raw | sha256sum | awk '{print $1}')
-          if [ "$tag_digest" = "$sha_digest" ]; then
+          # Harbor is eventually consistent: immediately after crane pushes both
+          # tags, re-inspecting them can briefly return different digests before
+          # the tag pointers settle. Poll until they converge instead of failing
+          # on the first read.
+          digests_match=false
+          for attempt in 1 2 3 4 5 6; do
+            tag_digest=$(docker buildx imagetools inspect "$registry:$image_tag" --raw | sha256sum | awk '{print $1}')
+            sha_digest=$(docker buildx imagetools inspect "$registry:$git_sha" --raw | sha256sum | awk '{print $1}')
+            if [ "$tag_digest" = "$sha_digest" ]; then
+              digests_match=true
+              break
+            fi
+            echo "⏳ Digests differ for $registry (attempt $attempt/6); waiting for tags to converge..."
+            sleep 10
+          done
+          if [ "$digests_match" = true ]; then
             echo "✅ Both tags point to the same manifest digest for $registry"
           else
-            echo "⚠️ Warning: Tags point to different manifests for $registry"
+            echo "❌ Tags point to different manifests for $registry after retries"
             echo "Image tag digest: $tag_digest"
             echo "Git SHA digest: $sha_digest"
             exit 1
